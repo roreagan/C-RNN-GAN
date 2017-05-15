@@ -141,6 +141,8 @@ flags.DEFINE_float("random_input_scale", 1.0,  #
                    "Scale of random inputs (1.0=same size as generated features).")
 flags.DEFINE_boolean("end_classification", False,
                      "Classify only in ends of D. Otherwise, does classification at every timestep and mean reduce.")
+flags.DEFINE_boolean("whether_exist_rnn", False,
+                     "Check whether RNN is created")
 
 FLAGS = flags.FLAGS
 
@@ -350,7 +352,7 @@ class RNNGAN(object):
         # These are used both for pretraining and for D/G training further down.
         self._lr = tf.Variable(FLAGS.learning_rate, trainable=False, dtype=data_type())
         # self.g_params = [v for v in tf.trainable_variables() if v.name.startswith('model/G/')]
-        self.g_params = [v for v in tf.trainable_variables() if v.name.startswith('G/')]
+        self.g_params = [v for v in tf.trainable_variables() if v.name.startswith('model/G/')]
         if FLAGS.adam:
             g_optimizer = tf.train.AdamOptimizer(self._lr)
         else:
@@ -399,7 +401,8 @@ class RNNGAN(object):
                                    songdata_inputs]
             # print('metadata inputs shape {}'.format(self._input_metadata.get_shape()))
             # print('generated metadata shape {}'.format(meta_probs.get_shape()))
-            self.real_d, self.real_d_features = self.discriminator(songdata_inputs, is_training, msg='real')
+            self.real_d, self.real_d_features = self.discriminator(songdata_inputs, is_training, msg='real', ifReuse=FLAGS.whether_exist_rnn)
+            FLAGS.whether_exist_rnn = True
             scope.reuse_variables()
             # TODO: (possibly temporarily) disabling meta info
             if FLAGS.generate_meta:
@@ -425,7 +428,7 @@ class RNNGAN(object):
             self.d_loss = self.d_loss + reg_loss
             self.g_loss_feature_matching = self.g_loss_feature_matching + reg_loss
             self.g_loss = self.g_loss + reg_loss
-        self.d_params = [v for v in tf.trainable_variables() if v.name.startswith('D/')]
+        self.d_params = [v for v in tf.trainable_variables() if v.name.startswith('model/D/')]
 
         if not is_training:
             return
