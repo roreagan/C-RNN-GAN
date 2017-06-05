@@ -60,7 +60,7 @@ def build_graph(config):
     num_song_features = config.num_song_features
     with tf.Graph().as_default() as graph:
         # input_melody is a seed with the shape of [batch_size, note_length, num_song_features] to generate a melody.
-        input_melody = tf.placeholder(dtype=tf.int32, shape=[batch_size, song_length, num_song_features])
+        input_melody = tf.placeholder(dtype=tf.int32, shape=[batch_size, song_length, config.total_length])
 
         global_step = tf.Variable(0, trainable=False, name='global_step')
 
@@ -75,18 +75,21 @@ def build_graph(config):
             # generate a random note as a seed with the shape of [batch_size, num_song_features] to
             # generate a piece of melody with the length of notes_length
             random_ticks = tf.random_uniform(shape=[batch_size, config.ticks_length], minval=0,
-                                             maxval=config.ticks_length-1, dtype=data_type())
+                                             maxval=1, dtype=data_type())
             random_length = tf.random_uniform(shape=[batch_size, config.length_length], minval=0,
-                                             maxval=config.length_length - 1, dtype=data_type())
+                                             maxval=1, dtype=data_type())
             random_pitch = tf.random_uniform(shape=[batch_size, config.pitch_length], minval=0,
-                                             maxval=config.pitch_length - 1, dtype=data_type())
+                                             maxval=1, dtype=data_type())
             random_velocity = tf.random_uniform(shape=[batch_size, config.velocity_length], minval=0,
-                                             maxval=config.velocity_length - 1, dtype=data_type())
+                                             maxval=1, dtype=data_type())
             # random_rnn_inputs' shape is [batch_size, num_song_features]
             random_rnn_inputs = tf.to_float(tf.concat([random_ticks, random_length, random_pitch, random_velocity], 1))
 
             output_melody = []
-            output_melody_probability = []
+            ticks_logits_flat_sum = []
+            length_logits_flat_sum = []
+            pitch_logits_flat_sum = []
+            velocity_logits_flat_sum = []
             generated_note = random_rnn_inputs
             state_g = init_state_g
 
@@ -97,50 +100,49 @@ def build_graph(config):
                                                            scope='note_to_input')
                 outputs, state_g = cell_g(inputs, state_g)
 
-                pitch_logits_flat = tf.contrib.layers.fully_connected(outputs, config.pitch_length,
-                                                                      scope='output_to_pitch')
-                ticks_logits_flat = tf.contrib.layers.fully_connected(outputs, config.ticks_length,
-                                                                      scope='output_to_ticks')
-                velocity_logits_flat = tf.contrib.layers.fully_connected(outputs, config.velocity_length,
-                                                                         scope='output_to_velocity')
-                length_logits_flat = tf.contrib.layers.fully_connected(outputs, config.length_length,
-                                                                       scope='output_to_length')
-                output_melody_probability.append([ticks_logits_flat, length_logits_flat,
-                                                           pitch_logits_flat, velocity_logits_flat])
-                pitchs = [tf.arg_max(tf.squeeze(note), 0) for note in
-                          tf.split(pitch_logits_flat, batch_size, 0)]
-                ticks = [tf.arg_max(tf.squeeze(note), 0) for note in
-                          tf.split(ticks_logits_flat, batch_size, 0)]
-                velocitys = [tf.arg_max(tf.squeeze(note), 0) for note in
-                          tf.split(velocity_logits_flat, batch_size, 0)]
-                lengths = [tf.arg_max(tf.squeeze(note), 0) for note in
-                          tf.split(length_logits_flat, batch_size, 0)]
-                generated_note = tf.to_float(tf.stack([ticks, lengths, pitchs, velocitys], axis=1))
-                output_melody.append(generated_note)
+                g_output_note = tf.sigmoid(tf.contrib.layers.fully_connected(outputs, config.total_length,
+                                                                             scope='output_to_note'))
+
+                ticks_logits_flat = tf.slice(g_output_note, [-1, 0], [-1, config.ticks_length])
+                length_logits_flat = tf.slice(g_output_note, [-1, config.ticks_length], [-1, config.length_length])
+                pitch_logits_flat = tf.slice(g_output_note, [-1, config.ticks_length + config.length_length],
+                                                [-1, config.pitch_length])
+                velocity_logits_flat = tf.slice(g_output_note, [-1, config.ticks_length + config.length_length +
+                                                              config.pitch_length], [-1, config.ticks_length])
+
+                ticks_logits_flat_sum.append(ticks_logits_flat)
+                length_logits_flat_sum.append(length_logits_flat)
+                pitch_logits_flat_sum.append(pitch_logits_flat)
+                velocity_logits_flat_sum.append(velocity_logits_flat)
+
+                generated_note = g_output_note
+                output_melody.append(g_output_note)
 
             # Pretraining
             # PreTraining
             # get softmax cross entropy of every song features
             # softmax for every features shows the probable value of one step
-            labels_flat = tf.reshape(input_melody, shape=[-1, num_song_features])
+            labels_flat = tf.reshape(input_melody, shape=[-1, config.total_length])
 
-            ticks_labels_flat = tf.squeeze(tf.slice(labels_flat, [-1, 0], [-1, 1]))
-            length_labels_flat = tf.squeeze(tf.slice(labels_flat, [-1, 0], [-1, 1]))
-            pitch_labels_flat = tf.squeeze(tf.slice(labels_flat, [-1, 0], [-1, 1]))
-            velocity_labels_flat = tf.squeeze(tf.slice(labels_flat, [-1, 0], [-1, 1]))
+            ticks_labels_flat = tf.slice(labels_flat, [-1, 0], [-1, config.ticks_length])
+            length_labels_flat = tf.slice(labels_flat, [-1, config.ticks_length], [-1, config.length_length])
+            pitch_labels_flat = tf.slice(labels_flat, [-1, config.ticks_length + config.length_length],
+                                         [-1, config.pitch_length])
+            velocity_labels_flat = tf.slice(labels_flat, [-1, config.ticks_length + config.length_length +
+                                                            config.pitch_length], [-1, config.ticks_length])
 
-            ticks_logits_flat_sum = [note[0] for note in output_melody_probability]
-            length_logits_flat_sum = [note[1] for note in output_melody_probability]
-            pitch_logits_flat_sum = [note[2] for note in output_melody_probability]
-            velocity_logits_flat_sum = [note[3] for note in output_melody_probability]
+            ticks_logits_flat_sum = tf.reshape(ticks_logits_flat_sum, [-1, config.ticks_length])
+            length_logits_flat_sum = tf.reshape(length_logits_flat_sum, [-1, config.length_length])
+            pitch_logits_flat_sum = tf.reshape(pitch_logits_flat_sum, [-1, config.pitch_length])
+            velocity_logits_flat_sum = tf.reshape(velocity_logits_flat_sum, [-1, config.velocity_length])
 
-            ticks_softmax_cross_entropy = tf.nn.sparse_softmax_cross_entropy_with_logits(
+            ticks_softmax_cross_entropy = tf.nn.softmax_cross_entropy_with_logits(
                     labels=ticks_labels_flat, logits=ticks_logits_flat_sum)
-            length_softmax_cross_entropy = tf.nn.sparse_softmax_cross_entropy_with_logits(
+            length_softmax_cross_entropy = tf.nn.softmax_cross_entropy_with_logits(
                     labels=length_labels_flat, logits=length_logits_flat_sum)
-            pitch_softmax_cross_entropy = tf.nn.sparse_softmax_cross_entropy_with_logits(
+            pitch_softmax_cross_entropy = tf.nn.softmax_cross_entropy_with_logits(
                     labels=pitch_labels_flat, logits=pitch_logits_flat_sum)
-            velocity_softmax_cross_entropy = tf.nn.sparse_softmax_cross_entropy_with_logits(
+            velocity_softmax_cross_entropy = tf.nn.softmax_cross_entropy_with_logits(
                     labels=velocity_labels_flat, logits=velocity_logits_flat_sum)
             pre_loss_g = tf.reduce_sum(tf.add(tf.add(tf.add(ticks_softmax_cross_entropy,
                                                                 length_softmax_cross_entropy),
@@ -178,7 +180,6 @@ def build_graph(config):
                 loss_g = tf.reduce_mean(-tf.log(tf.clip_by_value(generated_d, 1e-1000000, 1.0)))
 
         d_params = [v for v in tf.trainable_variables() if v.name.startswith('D/')]
-        g_params = [v for v in tf.trainable_variables() if v.name.startswith('G/')]
 
         loss_d = loss_d + reg_loss
         loss_g = loss_g + reg_loss
@@ -188,7 +189,8 @@ def build_graph(config):
         d_grads, _ = tf.clip_by_global_norm(
             tf.gradients(loss_d, d_params, aggregation_method=tf.AggregationMethod.EXPERIMENTAL_ACCUMULATE_N),
             config.max_grad_norm)
-        g_grads = tf.gradients(loss_g, g_params, aggregation_method=tf.AggregationMethod.EXPERIMENTAL_ACCUMULATE_N)
+        g_grads = tf.clip_by_global_norm(tf.gradients(loss_g, g_params, aggregation_method=
+                                                tf.AggregationMethod.EXPERIMENTAL_ACCUMULATE_N), config.max_grad_norm)
         train_d_op = optimizer_d.apply_gradients(zip(d_grads, d_params))
         clip_d_op = [w.assign(tf.clip_by_value(w, -config.clip_w_norm, config.clip_w_norm)) for w in d_params]
         train_g_op = optimizer_g.apply_gradients(zip(g_grads, g_params))
@@ -218,6 +220,7 @@ class RnnGanConfig:
         self.ticks_length = 20
         self.length_length = 30
         self.velocity_length = 50
+        self.total_length = self.pitch_length + self.ticks_length + self.length_length + self.velocity_length
         self.clip_norm = 5
         self.initial_g_learning_rate = 0.01
         self.initial_learning_rate = 0.0001
