@@ -78,31 +78,37 @@ def build_graph(config):
             # Train
             # generate a random note as a seed with the shape of [batch_size, num_song_features] to
             # generate a piece of melody with the length of notes_length
-            random_ticks = tf.random_uniform(shape=[batch_size, 1], minval=0,
+            random_ticks = tf.random_uniform(shape=[batch_size, config.song_length, 1], minval=0,
                                              maxval=config.melody_params.nor_ticks, dtype=tf.int32)
-            random_length = tf.random_uniform(shape=[batch_size, 1], minval=0, maxval=config.melody_params.nor_length,
-                                              dtype=tf.int32)
-            random_pitch = tf.random_uniform(shape=[batch_size, 1], minval=0, maxval=config.melody_params.nor_pitch,
-                                             dtype=tf.int32)
-            random_velocity = tf.random_uniform(shape=[batch_size, 1], minval=0,
+            random_length = tf.random_uniform(shape=[batch_size, song_length, 1], minval=0,
+                                              maxval=config.melody_params.nor_length, dtype=tf.int32)
+            random_pitch = tf.random_uniform(shape=[batch_size, config.song_length, 1], minval=0,
+                                             maxval=config.melody_params.nor_pitch, dtype=tf.int32)
+            random_velocity = tf.random_uniform(shape=[batch_size, config.song_length, 1], minval=0,
                                                 maxval=config.melody_params.nor_velocity, dtype=tf.int32)
-            # random_rnn_inputs' shape is [batch_size, num_song_features]
-            random_rnn_inputs = tf.to_float(tf.concat([random_ticks, random_length, random_pitch, random_velocity], 1))
+            # random_rnn_input' shape is [batch_size, song_length, num_song_features]
+            random_rnn_input = tf.to_float(tf.concat([random_ticks, random_length, random_pitch, random_velocity], 2))
+
+            random_rnn_inputs = [tf.squeeze(input_, [1]) for input_ in tf.split(random_rnn_input, song_length, 1)]
 
             output_melody = []
-            generated_note = random_rnn_inputs
+            generated_note = random_rnn_inputs[0]
+            if config.feedback_previous:
+                generated_note = tf.concat([generated_note, generated_note], 1)
             state_g = init_state_g
 
             for i in range(song_length):
                 if i > 0:
                     scopeG.reuse_variables()
+                    if config.feedback_previous:
+                        generated_note = tf.concat([generated_note, random_rnn_inputs[i]], 1)
+
                 inputs = tf.nn.relu(tf.contrib.layers.fully_connected(generated_note, config.g_rnn_layers[0],
                                                            scope='note_to_input'))
                 outputs, state_g = cell_g(inputs, state_g)
 
                 g_output_note = tf.contrib.layers.fully_connected(outputs, config.num_song_features,
                                                                   scope='output_to_note')
-
                 generated_note = g_output_note
                 output_melody.append(g_output_note)
 
@@ -187,19 +193,22 @@ def build_graph(config):
 class RnnGanConfig:
     def __init__(self, melody_param=None):
         self.batch_size = 10
-        self.song_length = 100
+        self.song_length = 50
         self.num_song_features = 4
-        self.g_rnn_layers = [5, 5]
-        self.d_rnn_layers = [5, 5]
+        self.g_rnn_layers = [300, 300]
+        self.d_rnn_layers = [300, 300]
         self.clip_norm = 5
         self.initial_g_learning_rate = 0.01
-        self.initial_learning_rate = 0.01
+        self.initial_learning_rate = 0.0001
         self.decay_steps = 1000
         self.decay_rate = 0.95
-        self.wgan = True
+
         self.reg_constant = 0.01  # for regularization, choose a appropriate one
         self.max_grad_norm = 5
         self.clip_w_norm = 0.02
+
+        self.wgan = True
+        self.feedback_previous = True
 
         self.melody_params = melody_param
 
