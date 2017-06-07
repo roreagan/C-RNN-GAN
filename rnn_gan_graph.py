@@ -32,7 +32,7 @@ def make_rnn_cell(rnn_layer_sizes,
   cell = tf.contrib.rnn.MultiRNNCell(cells, state_is_tuple=state_is_tuple)
   if attn_length:
     cell = tf.contrib.rnn.AttentionCellWrapper(
-        cell, attn_length, state_is_tuple=state_is_tuple)
+        cell, attn_length, state_is_tuple=state_is_tuple, reuse=reuse)
 
   return cell
 
@@ -75,57 +75,36 @@ def build_graph(config):
             cell_g = make_rnn_cell(config.g_rnn_layers)  # set to [300, 300]
             init_state_g = cell_g.zero_state(batch_size, data_type())
 
-            # Train
-            # generate a random note as a seed with the shape of [batch_size, num_song_features] to
-            # generate a piece of melody with the length of notes_length
-            random_ticks = tf.random_uniform(shape=[batch_size, config.song_length, 1], minval=0,
-                                             maxval=config.melody_params.nor_ticks, dtype=tf.int32)
-            random_length = tf.random_uniform(shape=[batch_size, song_length, 1], minval=0,
-                                              maxval=config.melody_params.nor_length, dtype=tf.int32)
-            random_pitch = tf.random_uniform(shape=[batch_size, config.song_length, 1], minval=0,
-                                             maxval=config.melody_params.nor_pitch, dtype=tf.int32)
-            random_velocity = tf.random_uniform(shape=[batch_size, config.song_length, 1], minval=0,
-                                                maxval=config.melody_params.nor_velocity, dtype=tf.int32)
-            # random_rnn_input' shape is [batch_size, song_length, num_song_features]
-            random_rnn_input = tf.to_float(tf.concat([random_ticks, random_length, random_pitch, random_velocity], 2))
+            # PreTraining
+            # input a note and the output note should be the next note in the input melody
 
-            random_rnn_inputs = [tf.squeeze(input_, [1]) for input_ in tf.split(random_rnn_input, song_length, 1)]
+            input_melodys = [tf.squeeze(input_, [1]) for input_ in tf.split(tf.to_float(input_melody), song_length, 1)]
 
-            output_melody = []
-            generated_note = random_rnn_inputs[0]
-            if config.feedback_previous:
-                generated_note = tf.concat([generated_note, generated_note], 1)
+            pre_output_melody = []
+            pre_output_melody.append(input_melodys[0])
             state_g = init_state_g
 
-            for i in range(song_length):
+            for i in range(song_length-1):
                 if i > 0:
                     scopeG.reuse_variables()
-                    if config.feedback_previous:
-                        generated_note = tf.concat([generated_note, random_rnn_inputs[i]], 1)
 
-                inputs = tf.nn.relu(tf.contrib.layers.fully_connected(generated_note, config.g_rnn_layers[0],
+                inputs = tf.nn.relu(tf.contrib.layers.fully_connected(input_melodys[i], config.g_rnn_layers[0],
                                                            scope='note_to_input'))
                 outputs, state_g = cell_g(inputs, state_g)
 
                 g_output_note = tf.contrib.layers.fully_connected(outputs, config.num_song_features,
                                                                   scope='output_to_note')
-                generated_note = g_output_note
-                output_melody.append(g_output_note)
+                pre_output_melody.append(g_output_note)
 
-            output_melody_tf = tf.transpose(output_melody, perm=[1, 0, 2])
-            tf.add_to_collection('output_melody', output_melody_tf)
-
-            # Pretraining
-            # PreTraining
-            # get softmax cross entropy of every song features
-            # softmax for every features shows the probable value of one step
+            pre_output_melody_tf = tf.transpose(pre_output_melody, perm=[1, 0, 2])
+            tf.add_to_collection('pre_output_melody', pre_output_melody_tf)
 
             weight_ticks = tf.constant([config.melody_params.ticks_weight, config.melody_params.length_weight,
                                         config.melody_params.pitch_weight, config.melody_params.velocity_weight],
                                        dtype=data_type())
 
-            pre_loss_g = tf.reduce_mean(tf.squared_difference(tf.multiply(output_melody_tf, weight_ticks),
-                                                              tf.multiply(tf.to_float(input_melody), weight_ticks)))
+            pre_loss_g = tf.reduce_sum(tf.squared_difference(tf.multiply(pre_output_melody_tf, weight_ticks),
+                                                             tf.multiply(tf.to_float(input_melody), weight_ticks)))
 
             reg_losses = tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES)
             reg_loss = config.reg_constant * sum(reg_losses)
@@ -133,18 +112,46 @@ def build_graph(config):
             pre_loss_g = pre_loss_g + reg_loss
             tf.add_to_collection('pre_loss_g', pre_loss_g)
 
-            # g_learning_rate = tf.train.exponential_decay(
-            #     config.initial_g_learning_rate, global_step, config.decay_steps,
-            #     config.decay_rate, staircase=True, name='learning_rate')
-
-            # g_opt = tf.train.AdamOptimizer(g_learning_rate)
-            g_opt = tf.train.GradientDescentOptimizer(config.initial_g_learning_rate)
+            pre_g_opt = tf.train.GradientDescentOptimizer(config.initial_g_learning_rate)
             g_params = [v for v in tf.trainable_variables() if v.name.startswith('G/')]
-            g_gradients = tf.gradients(pre_loss_g, g_params)
-            clipped_gradients, _ = tf.clip_by_global_norm(g_gradients, config.clip_norm)
-            g_pre_train_op = g_opt.apply_gradients(zip(clipped_gradients, g_params), global_step)
+            pre_g_gradients = tf.gradients(pre_loss_g, g_params)
+            clipped_gradients, _ = tf.clip_by_global_norm(pre_g_gradients, config.clip_norm)
+            g_pre_train_op = pre_g_opt.apply_gradients(zip(clipped_gradients, g_params), global_step)
             # tf.add_to_collection('g_learning_rate', g_learning_rate)
             tf.add_to_collection('g_pre_train_op', g_pre_train_op)
+
+            # Train
+            # generate a random note as a seed with the shape of [batch_size, num_song_features] to
+            # generate a piece of melody with the length of notes_length
+            random_ticks = tf.random_uniform(shape=[batch_size, 1], minval=0,
+                                             maxval=config.melody_params.nor_ticks, dtype=tf.int32)
+            random_length = tf.random_uniform(shape=[batch_size, 1], minval=0,
+                                              maxval=config.melody_params.nor_length, dtype=tf.int32)
+            random_pitch = tf.random_uniform(shape=[batch_size, 1], minval=0,
+                                             maxval=config.melody_params.nor_pitch, dtype=tf.int32)
+            random_velocity = tf.random_uniform(shape=[batch_size, 1], minval=0,
+                                                maxval=config.melody_params.nor_velocity, dtype=tf.int32)
+            # random_rnn_input' shape is [batch_size, num_song_features]
+            random_rnn_input = tf.to_float(tf.concat([random_ticks, random_length, random_pitch, random_velocity], 1))
+
+            output_melody = []
+            generated_note = random_rnn_input
+
+            for i in range(song_length):
+                if i > 0:
+                    scopeG.reuse_variables()
+
+                inputs = tf.nn.relu(tf.contrib.layers.fully_connected(generated_note, config.g_rnn_layers[0],
+                                                                      scope='note_to_input'))
+                outputs, state_g = cell_g(inputs, state_g)
+
+                g_output_note = tf.contrib.layers.fully_connected(outputs, config.num_song_features,
+                                                                  scope='output_to_note')
+                generated_note = g_output_note
+                output_melody.append(g_output_note)
+
+            output_melody_tf = tf.transpose(pre_output_melody, perm=[1, 0, 2])
+            tf.add_to_collection('output_melody', output_melody_tf)
 
 
         with tf.variable_scope('D') as scopeD:
@@ -193,9 +200,9 @@ def build_graph(config):
 class RnnGanConfig:
     def __init__(self, melody_param=None):
         self.batch_size = 10
-        self.song_length = 50
+        self.song_length = 100
         self.num_song_features = 4
-        self.g_rnn_layers = [300, 300]
+        self.g_rnn_layers = [300, 300, 300]
         self.d_rnn_layers = [300, 300]
         self.clip_norm = 5
         self.initial_g_learning_rate = 0.01
@@ -208,7 +215,7 @@ class RnnGanConfig:
         self.clip_w_norm = 0.02
 
         self.wgan = True
-        self.feedback_previous = True
+        self.feedback_previous = False
 
         self.melody_params = melody_param
 

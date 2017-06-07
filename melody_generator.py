@@ -20,7 +20,7 @@ tf.app.flags.DEFINE_integer("select_validation_percentage", 20,
                             "Select random percentage of data as validation set.")
 tf.app.flags.DEFINE_integer("select_test_percentage", 20,
                             "Select random percentage of data as test set.")
-tf.app.flags.DEFINE_integer("num_max_epochs", 4000,
+tf.app.flags.DEFINE_integer("num_max_epochs", 5000,
                             "Select random percentage of data as test set.")
 
 
@@ -31,49 +31,46 @@ def melody_train(graph, loader, config, summary_frequency=2):
     loss_g = graph.get_collection('loss_g')[0]
     clip_d_op = graph.get_collection('clip_d_op')[0]
     train_g_op = graph.get_collection('train_g_op')[0]
-    output_melody = graph.get_collection('output_melody')[0]
+    pre_output_melody = graph.get_collection('pre_output_melody')[0]
+    output_melody = graph.get_collection('output_melody')
     g_pre_train_op = graph.get_collection('g_pre_train_op')[0]
     pre_loss_g = graph.get_collection('pre_loss_g')[0]
 
-    sv = tf.train.Supervisor(graph=graph, logdir=FLAGS.traindir, save_model_secs=120, global_step=global_step)
+    sv = tf.train.Supervisor(graph=graph, logdir=FLAGS.traindir, save_model_secs=1200, global_step=global_step)
 
     with sv.managed_session() as session:
         global_step_ = session.run(global_step)
         tf.logging.info('Starting training loop...')
+        print('Begin Run Net. Print Every 100 epochs ')
         while global_step_ < FLAGS.num_max_epochs:
             if sv.should_stop():
                 break
-            d_iters = 4
-            for _ in range(d_iters):
+            if global_step_ < 3500:
+                # Pre-Training
                 batch_songs = loader.get_batch(config.batch_size, config.song_length)
-                iter_loss_d, clip_d_op_ = session.run([loss_d, clip_d_op], {input_melody: batch_songs})
+                if global_step_ > 100 and global_step_ % 100 == 0:
+                    output_melody_, pre_loss_g_, global_step_, _ = session.run(
+                        [pre_output_melody, pre_loss_g, global_step,
+                         g_pre_train_op], {input_melody: batch_songs})
+                    print('Epoch: %d  pre_loss: %f' % (global_step_, pre_loss_g_))
+                    print(output_melody_[0][0:30])
+                else:
+                    pre_loss_g_, global_step_, _ = session.run([pre_loss_g, global_step, g_pre_train_op],
+                                                               {input_melody: batch_songs})
+            else:
+                # Training
+                d_iters = 4
+                for _ in range(d_iters):
+                    batch_songs = loader.get_batch(config.batch_size, config.song_length)
+                    _ = session.run([clip_d_op], {input_melody: batch_songs})
 
-            batch_songs = loader.get_batch(config.batch_size, config.song_length)
-            g_op, global_step_, g_loss, d_loss, output_melody_ = session.run(
-                [train_g_op, global_step, loss_g, loss_d, output_melody], {input_melody: batch_songs})
+                batch_songs = loader.get_batch(config.batch_size, config.song_length)
+                g_op, global_step_, g_loss, d_loss, output_melody_ = session.run(
+                    [train_g_op, global_step, loss_g, loss_d, output_melody], {input_melody: batch_songs})
 
-            if global_step_ % 20 == 0 and global_step_ > 0:
-                print('Global_step: %d    loss_d: %f    loss_g: %f', global_step_, d_loss, g_loss)
-                print(output_melody_[0][0: 10])
-
-            # if global_step_ % 5 == 0 and global_step_ != 0:
-            #     outputs = session.run([output_melody])
-            #      # sv.saver.save(session, sv.save_path, global_step=sv.global_step)
-            #     print ('Global_step is actually increased')
-            #     print outputs
-
-            # # Pre-train
-            # mark, batch_songs = loader.get_batch(config.batch_size, config.song_length)
-            # if global_step_ > 100 and global_step_ % 20 == 0:
-            #     output_melody_, pre_loss_g_, global_step_, _ = session.run([output_melody, pre_loss_g, global_step,
-            #                                                              g_pre_train_op], {input_melody: batch_songs})
-            #     print('Epoch: %d  pre_loss: %f', global_step_, pre_loss_g_)
-            #     print(output_melody_[0][0:10])
-            # else:
-            #     pre_loss_g_, global_step_, _ = session.run([pre_loss_g, global_step, g_pre_train_op],
-            #                                                {input_melody: batch_songs})
-            #     print('Epoch: %d  pre_loss: %f', global_step_, pre_loss_g_)
-
+                if global_step_ % 50 == 0 and global_step_ > 0:
+                    print('Global_step: %d    loss_d: %f    loss_g: %f' % (global_step_, d_loss, g_loss))
+                    print(output_melody_[0][0][0: 30])
 
 
 
@@ -85,21 +82,22 @@ def main(_):
         raise ValueError("Must set --datadir to midi music dir.")
     if not FLAGS.traindir:
         raise ValueError("Must set --traindir to dir where I can save model and plots.")
-    print('Begin Create Graph....')
+
 
     if not os.path.exists(FLAGS.traindir):
         try:
             os.makedirs(FLAGS.traindir)
         except:
             raise IOError
-    print('Train dir: %s', FLAGS.traindir)
+    print('Train dir: %s' % FLAGS.traindir)
 
     melody_param = MelodyParam()
     config = rnn_gan_graph.RnnGanConfig(melody_param=melody_param)
+    print('Begin Create Graph....')
     graph = rnn_gan_graph.build_graph(config)
+    print('Begin Load Data....')
     loader = melody_utils.MusicDataLoader(FLAGS.datadir, FLAGS.select_validation_percentage,
                                           FLAGS.select_test_percentage, config)
-
 
     melody_train(graph, loader, config)
 
@@ -123,11 +121,18 @@ class MelodyParam:
 
         self.total_length = self.nor_ticks + self.nor_length + self.nor_pitch + self.nor_velocity
 
-        self.ticks_weight = self.nor_ticks / float(self.total_length)
-        self.length_weight = self.nor_length / float(self.total_length)
-        self.pitch_weight = self.nor_pitch / float(self.total_length)
-        self.velocity_weight = self.nor_velocity / float(self.total_length)
+        pitch_rate = 1
+        velocity_rate = 0.25
 
+        # self.ticks_weight = self.nor_ticks / float(self.total_length)
+        # self.length_weight = self.nor_length / float(self.total_length)
+        # self.pitch_weight = self.nor_pitch / float(self.total_length) * pitch_rate
+        # self.velocity_weight = self.nor_velocity / float(self.total_length) * velocity_rate
+
+        self.ticks_weight = 1
+        self.length_weight = 1
+        self.pitch_weight = 1
+        self.velocity_weight = 0.2
 
 
 if __name__ == '__main__':
