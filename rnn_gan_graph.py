@@ -66,7 +66,7 @@ def build_graph(config):
         # input_melody is a seed with the shape of [batch_size, note_length, num_song_features] to generate a melody.
         input_melody = tf.placeholder(dtype=tf.int32, shape=[batch_size, song_length, config.num_song_features])
 
-        global_step = tf.Variable(0, trainable=False, name='global_step')
+        global_step = tf.Variable(1, trainable=False, name='global_step')
 
         tf.add_to_collection('input_melody', input_melody)
         tf.add_to_collection('global_step', global_step)
@@ -215,7 +215,6 @@ class RnnGanConfig:
         self.clip_w_norm = 0.02
 
         self.wgan = True
-        self.feedback_previous = False
 
         self.melody_params = melody_param
 

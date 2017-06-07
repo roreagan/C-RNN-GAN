@@ -1,23 +1,4 @@
-# Tools to load and save midi files for the rnn-gan-project.
-#
-# Written by Olof Mogren, http://mogren.one/
-#
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-# ==============================================================================
-
-
-import urlparse, urllib2, os, midi, math, random, re, string, sys
+import urlparse, urllib2, os, midi, random, re, string, sys
 import numpy as np
 
 import source
@@ -43,22 +24,20 @@ debug = ''
 
 class MusicDataLoader(object):
     def __init__(self, datadir, select_validation_percentage, select_test_percentage, config, works_per_composer=None,
-                 pace_events=False, synthetic=None, tones_per_cell=1, single_composer=None):
+                 single_composer=None, not_read=False):
         self.datadir = datadir
         self.output_ticks_per_quarter_note = 120
-        self.tones_per_cell = tones_per_cell
         self.single_composer = single_composer
         self.config = config
         self.pointer = {}
         self.pointer['validation'] = 0
         self.pointer['test'] = 0
         self.pointer['train'] = 0
-        if synthetic == 'chords':
-            self.generate_chords(pace_events=pace_events)
-        elif not datadir is None:
-            print('Data loader: datadir: {}'.format(datadir))
+        print('Data loader: datadir: {}'.format(datadir))
+        if not not_read:
             self.download_midi_data()
-            self.read_data(select_validation_percentage, select_test_percentage, works_per_composer, pace_events)
+            self.read_data(select_validation_percentage, select_test_percentage, works_per_composer)
+
 
     def download_midi_data(self):
         """
@@ -137,130 +116,7 @@ class MusicDataLoader(object):
         with open(os.path.join(self.datadir, 'do-not-redownload.txt'), 'w') as f:
             f.write('This directory is considered completely downloaded.')
 
-    def generate_chords(self, pace_events):
-        """
-        generate_chords generates synthetic songs with either major or minor chords
-        in a chosen scale.
-
-        returns a list of tuples, [genre, composer, song_data]
-        Also saves this list in self.songs.
-
-        Time steps will be fractions of beat notes (32th notes).
-        """
-
-        self.genres = ['classical']
-        print('num genres:{}'.format(len(self.genres)))
-        self.composers = ['generated_chords']
-        print('num composers: {}'.format(len(self.composers)))
-
-        self.songs = {}
-        self.songs['validation'] = []
-        self.songs['test'] = []
-        self.songs['train'] = []
-
-        # https://songwritingandrecordingtips.wordpress.com/2012/02/09/chord-progressions-that-fit-together/
-        # M m m M M m
-        base_tones = [0, 2, 4, 5, 7, 9]
-        chord_is_major = [True, False, False, True, True, False]
-        # (W-W-H-W-W-W-H)
-        # (2 2 1 2 2 2 1)
-        major_third_offset = 4
-        minor_third_offset = 3
-        fifth_offset = 7
-
-        songlength = 500
-        numsongs = 1000
-
-        genre = self.genres[0]
-        composer = self.composers[0]
-
-        # write_files = False
-        # print('write_files = False')
-        # if self.datadir is not None:
-        #  write_files = True
-        #  print('write_files = True')
-        #  dirnameforallfiles = os.path.join(self.datadir, os.path.join(genre, composer))
-        #  if not os.path.exists(dirnameforallfiles):
-        #    os.makedirs(dirnameforallfiles)
-        #  else:
-        #    print('write_files = False')
-        #    write_files = False
-
-        for i in xrange(numsongs):
-            # OVERFIT
-            if i % 100 == 99:
-                print 'Generating songs {}/{}: {}'.format(genre, composer, (i + 1))
-
-            song_data = []
-            key = random.randint(0, 100)
-            # key = 50
-
-            # Tempo:
-            ticks_per_quarter_note = 384
-
-            for j in xrange(songlength):
-                last_event_input_tick = 0
-                not_closed_notes = []
-                begin_tick = float(j * ticks_per_quarter_note)
-                velocity = float(100)
-                length = ticks_per_quarter_note - 1
-
-                # randomness out of chords that 'fit'
-                # https://songwritingandrecordingtips.wordpress.com/2012/02/09/chord-progressions-that-fit-together/
-                base_tone_index = random.randint(0, 5)
-                base_tone = key + base_tones[base_tone_index]
-                is_major = chord_is_major[base_tone_index]
-                third = base_tone + major_third_offset
-                if not is_major:
-                    third = base_tone + minor_third_offset
-                fifth = base_tone + fifth_offset
-
-                note = [0.0] * (NUM_FEATURES_PER_TONE + 1)
-                note[LENGTH] = length
-                note[FREQ] = tone_to_freq(base_tone)
-                note[VELOCITY] = velocity
-                note[BEGIN_TICK] = begin_tick
-                song_data.append(note)
-                note2 = note[:]
-                note2[FREQ] = tone_to_freq(third)
-                song_data.append(note2)
-                note3 = note[:]
-                note3[FREQ] = tone_to_freq(fifth)
-                song_data.append(note3)
-            song_data.sort(key=lambda e: e[BEGIN_TICK])
-            # print(song_data)
-            # sys.exit()
-            # if (pace_events):
-            #     pace_event_list = []
-            #     pace_tick = 0.0
-            #     song_tick_length = song_data[-1][BEGIN_TICK] + song_data[-1][LENGTH]
-            #     while pace_tick < song_tick_length:
-            #         song_data.append([0.0, 440.0, 0.0, pace_tick, 0.0])
-            #         pace_tick += ticks_per_quarter_note / input_ticks_per_output_tick
-            #     song_data.sort(key=lambda e: e[BEGIN_TICK])
-            if self.datadir is not None and i == 0:
-                filename = os.path.join(self.datadir, '{}.mid'.format(i))
-                if not os.path.exists(filename):
-                    print('saving: {}.'.format(filename))
-                    self.save_data(filename, song_data)
-                else:
-                    print('file exists. Not overwriting: {}.'.format(filename))
-
-            if i % 100 == 0:
-                self.songs['validation'].append([genre, composer, song_data])
-            elif i % 100 == 1:
-                self.songs['test'].append([genre, composer, song_data])
-            else:
-                self.songs['train'].append([genre, composer, song_data])
-
-        self.pointer['validation'] = 0
-        self.pointer['test'] = 0
-        self.pointer['train'] = 0
-        print('lens: train: {}, val: {}, test: {}'.format(len(self.songs['train']), len(self.songs['validation']),
-                                                          len(self.songs['test'])))
-        return self.songs
-
-    def read_data(self, select_validation_percentage, select_test_percentage, works_per_composer, pace_events):
+    def read_data(self, select_validation_percentage, select_test_percentage, works_per_composer):
         """
         read_data takes a datadir with genre subdirs, and composer subsubdirs
         containing midi files, reads them into training data for an rnn-gan model.
@@ -361,7 +217,7 @@ class MusicDataLoader(object):
                     if i % 100 == 99 or i + 1 == len(files) or i + 1 == works_per_composer:
                         print 'Reading files {}/{}: {}'.format(genre, composer, (i + 1))
                     if os.path.isfile(os.path.join(current_path, f)):
-                        song_data = self.read_one_file(current_path, f, pace_events)
+                        song_data = self.read_one_file(current_path, f)
                         if song_data is None:
                             continue
                         if os.path.join(os.path.join(genre, composer), f) in source.file_list['validation']:
@@ -386,7 +242,7 @@ class MusicDataLoader(object):
         # print('lens: train: {}, val: {}, test: {}'.format(len(self.songs['train']), len(self.songs['validation']), len(self.songs['test'])))
         return self.songs
 
-    def read_one_file(self, path, filename, pace_events):
+    def read_one_file(self, path, filename):
         try:
             if debug:
                 print('Reading {}'.format(os.path.join(path, filename)))
@@ -493,14 +349,6 @@ class MusicDataLoader(object):
             #     e[LENGTH] = float(ticks_per_quarter_note) / input_ticks_per_output_tick
             #     song_data.append(e)
         song_data.sort(key=lambda e: e[BEGIN_TICK])
-        if (pace_events):
-            pace_event_list = []
-            pace_tick = 0.0
-            song_tick_length = song_data[-1][BEGIN_TICK] + song_data[-1][LENGTH]
-            while pace_tick < song_tick_length:
-                song_data.append([0.0, 440.0, 0.0, pace_tick, 0.0])
-                pace_tick += float(ticks_per_quarter_note) / input_ticks_per_output_tick
-            song_data.sort(key=lambda e: e[BEGIN_TICK])
         return song_data
 
     def rewind(self, part='train'):
@@ -654,201 +502,60 @@ class MusicDataLoader(object):
             raise 'get_batch_one_hot() called but self.songs is not initialized.'
 
 
-    def get_midi_pattern(self, song_data):
+    def data_to_song(self, song_name, song_data):
         """
-        get_midi_pattern takes a song in internal representation 
-        (a tensor of dimensions [songlength, self.num_song_features]).
-        the three values are length, frequency, velocity.
-        if velocity of a frame is zero, no midi event will be
-        triggered at that frame.
-
-        returns the midi_pattern.
-
-        Can be used with filename == None. Then nothing is saved, but only returned.
+        data_to_song takes a song in internal representation in the shape of
+        [song_length, num_song_features] to a midi pattern
+        all the features are retrieved to the settings in config 
+        
+        :param song_data: 
+        :return: a midi pattern of song_data
         """
 
-        #
-        # Interpreting the midi pattern.
-        # A pattern has a list of tracks
-        # (midi.Track()).
-        # Each track is a list of events:
-        #   * midi.events.SetTempoEvent: tick, data([int, int, int])
-        #     (The three ints are really three bytes representing one integer.)
-        #   * midi.events.TimeSignatureEvent: tick, data([int, int, int, int])
-        #     (ignored)
-        #   * midi.events.KeySignatureEvent: tick, data([int, int])
-        #     (ignored)
-        #   * midi.events.MarkerEvent: tick, text, data
-        #   * midi.events.PortEvent: tick(int), data
-        #   * midi.events.TrackNameEvent: tick(int), text(string), data([ints])
-        #   * midi.events.ProgramChangeEvent: tick, channel, data
-        #   * midi.events.ControlChangeEvent: tick, channel, data
-        #   * midi.events.PitchWheelEvent: tick, data(two bytes, 14 bits)
-        #
-        #   * midi.events.NoteOnEvent:  tick(int), channel(int), data([int,int]))
-        #     - data[0] is the note (0-127)
-        #     - data[1] is the velocity.
-        #     - if velocity is 0, this is equivalent of a midi.NoteOffEvent
-        #   * midi.events.NoteOffEvent: tick(int), channel(int), data([int,int]))
-        #
-        #   * midi.events.EndOfTrackEvent: tick(int), data()
-        #
-        # Ticks are relative.
-        #
-        # Tempo are in microseconds/quarter note.
-        #
-        # This interpretation was done after reading
-        # http://electronicmusic.wikia.com/wiki/Velocity
-        # http://faydoc.tripod.com/formats/mid.htm
-        # http://www.lastrayofhope.co.uk/2009/12/23/midi-delta-time-ticks-to-seconds/2/
-        # and looking at some files. It will hopefully be enough
-        # for the use in this project.
-        #
-        # This approach means that we do not currently support
-        #   tempo change events.
-        #
-
-        # Tempo:
-        # Multiply with output_ticks_pr_input_tick for output ticks.
         midi_pattern = midi.Pattern([], resolution=int(self.output_ticks_per_quarter_note))
         cur_track = midi.Track([])
-        cur_track.append(midi.events.SetTempoEvent(tick=0, bpm=45))
-        future_events = {}
-        last_event_tick = 0
+        cur_track.append(midi.events.SetTempoEvent(tick=0, bpm=self.config.melody_params.bpm))
 
-        ticks_to_this_tone = 0.0
         song_events_absolute_ticks = []
-        abs_tick_note_beginning = 0.0
+        abs_tick_note_beginning = 0
         for frame in song_data:
-            abs_tick_note_beginning += frame[TICKS_FROM_PREV_START]
-            for subframe in xrange(self.tones_per_cell):
-                offset = subframe * NUM_FEATURES_PER_TONE
-                tick_len = int(round(frame[offset + LENGTH]))
-                freq = frame[offset + FREQ]
-                velocity = min(int(round(frame[offset + VELOCITY])), 127)
-                # print('tick_len: {}, freq: {}, velocity: {}, ticks_from_prev_start: {}'.format(tick_len, freq, velocity, frame[TICKS_FROM_PREV_START]))
-                d = freq_to_tone(freq)
-                # print('d: {}'.format(d))
-                if d is not None and velocity > 0 and tick_len > 0:
-                    # range-check with preserved tone, changed one octave:
-                    tone = d['tone']
-                    while tone < 0:   tone += 12
-                    while tone > 127: tone -= 12
-                    pitch_wheel = cents_to_pitchwheel_units(d['cents'])
-                    # print('tick_len: {}, freq: {}, tone: {}, pitch_wheel: {}, velocity: {}'.format(tick_len, freq, tone, pitch_wheel, velocity))
-                    # if pitch_wheel != 0:
-                    # midi.events.PitchWheelEvent(tick=int(ticks_to_this_tone),
-                    #                                            pitch=pitch_wheel)
-                    song_events_absolute_ticks.append((abs_tick_note_beginning,
-                                                       midi.events.NoteOnEvent(
-                                                           tick=0,
-                                                           velocity=velocity,
-                                                           pitch=tone)))
-                    song_events_absolute_ticks.append((abs_tick_note_beginning + tick_len,
-                                                       midi.events.NoteOffEvent(
-                                                           tick=0,
-                                                           velocity=0,
-                                                           pitch=tone)))
+            ticks = int(round(frame[TICKS_FROM_PREV_START])) * 15 + self.config.melody_params.ticks_min
+            if ticks > self.config.melody_params.ticks_max:
+                ticks = self.config.melody_params.ticks_max
+            abs_tick_note_beginning += ticks
+            tick_len = int(round(frame[LENGTH])) * 15 + self.config.melody_params.length_min
+            if tick_len > self.config.melody_params.length_max:
+                tick_len = self.config.melody_params.length_max
+            pitch = int(round(frame[FREQ])) + self.config.melody_params.pitch_min
+            if pitch > self.config.melody_params.pitch_max:
+                pitch = self.config.melody_params.pitch_max
+            velocity = int(round(frame[VELOCITY])) + self.config.melody_params.velocity_min
+            if velocity > self.config.melody_params.velocity_max:
+                velocity = self.config.melody_params.velocity_max
+
+            song_events_absolute_ticks.append((abs_tick_note_beginning,
+                                               midi.events.NoteOnEvent(
+                                                   tick=0,
+                                                   velocity=velocity,
+                                                   pitch=pitch)))
+            song_events_absolute_ticks.append((abs_tick_note_beginning + tick_len,
+                                               midi.events.NoteOffEvent(
+                                                   tick=0,
+                                                   velocity=0,
+                                                   pitch=pitch)))
+
         song_events_absolute_ticks.sort(key=lambda e: e[0])
-        abs_tick_note_beginning = 0.0
+        abs_tick_note_beginning = 0
         for abs_tick, event in song_events_absolute_ticks:
             rel_tick = abs_tick - abs_tick_note_beginning
-            event.tick = int(round(rel_tick))
+            event.tick = rel_tick
             cur_track.append(event)
             abs_tick_note_beginning = abs_tick
 
         cur_track.append(midi.EndOfTrackEvent(tick=int(self.output_ticks_per_quarter_note)))
         midi_pattern.append(cur_track)
-        # print 'Printing midi track.'
-        # print midi_pattern
-        return midi_pattern
-
-    def save_midi_pattern(self, filename, midi_pattern):
-        if filename is not None:
-            midi.write_midifile(filename, midi_pattern)
-
-    def save_data(self, filename, song_data):
-        """
-        save_data takes a filename and a song in internal representation 
-        (a tensor of dimensions [songlength, 3]).
-        the three values are length, frequency, velocity.
-        if velocity of a frame is zero, no midi event will be
-        triggered at that frame.
-
-        returns the midi_pattern.
-
-        Can be used with filename == None. Then nothing is saved, but only returned.
-        """
-        midi_pattern = self.get_midi_pattern(song_data)
-        self.save_midi_pattern(filename, midi_pattern)
-        return midi_pattern
+        midi.write_midifile(song_name, midi_pattern)
 
 
-def tone_to_freq(tone):
-    """
-      returns the frequency of a tone. 
-
-      formulas from
-        * https://en.wikipedia.org/wiki/MIDI_Tuning_Standard
-        * https://en.wikipedia.org/wiki/Cent_(music)
-    """
-    return math.pow(2, ((float(tone) - 69.0) / 12.0)) * 440.0
-
-
-def freq_to_tone(freq):
-    """
-      returns a dict d where
-      d['tone'] is the base tone in midi standard
-      d['cents'] is the cents to make the tone into the exact-ish frequency provided.
-                 multiply this with 8192 to get the midi pitch level.
-
-      formulas from
-        * https://en.wikipedia.org/wiki/MIDI_Tuning_Standard
-        * https://en.wikipedia.org/wiki/Cent_(music)
-    """
-    if freq <= 0.0:
-        return None
-    float_tone = (69.0 + 12 * math.log(float(freq) / 440.0, 2))
-    int_tone = int(float_tone)
-    cents = int(1200 * math.log(float(freq) / tone_to_freq(int_tone), 2))
-    return {'tone': int_tone, 'cents': cents}
-
-
-def cents_to_pitchwheel_units(cents):
-    return int(40.96 * (float(cents)))
-
-
-def onehot(i, length):
-    a = np.zeros(shape=[length])
-    a[i] = 1
-    return a
-
-
-def main():
-    filename = sys.argv[1]
-    print('File: {}'.format(filename))
-    dl = MusicDataLoader(datadir=None, select_validation_percentage=0.0, select_test_percentage=0.0)
-    print('length, frequency, velocity, time from previous start.')
-    abs_song_data = dl.read_one_file(os.path.dirname(filename), os.path.basename(filename), pace_events=True)
-
-    rel_song_data = []
-    last_start = None
-    for i, e in enumerate(abs_song_data):
-        this_start = e[3]
-        if last_start:
-            e[3] = e[3] - last_start
-        rel_song_data.append(e)
-        last_start = this_start
-        print(e)
-    if len(sys.argv) > 2:
-        if not os.path.exists(sys.argv[2]):
-            print('Saving: {}.'.format(sys.argv[2]))
-            dl.save_data(sys.argv[2], rel_song_data)
-        else:
-            print('File already exists: {}. Not saving.'.format(sys.argv[2]))
-
-
-if __name__ == "__main__":
-    main()
 
 

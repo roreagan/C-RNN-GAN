@@ -1,11 +1,10 @@
 """" 
 RNN-GAN networks to generate a piece of melody
-parameters:
 
 to run:
-
+python melody_generator.py --datadir data/examples/ --traindir data/traindir2/ --select_validation_percentage 20 --select_test_percentage 20
 """
-import os
+import os, datetime
 
 import tensorflow as tf
 import rnn_gan_graph
@@ -15,7 +14,9 @@ FLAGS = tf.app.flags.FLAGS
 tf.app.flags.DEFINE_string("datadir", None,
                            "Directory to save and load midi music files.")
 tf.app.flags.DEFINE_string("traindir", None,
-                           "Directory to save checkpoints and gnuplot files.")
+                           "Directory to save checkpoints.")
+tf.app.flags.DEFINE_string("generated_data_dir", None,
+                           "Directory to save midi files.")
 tf.app.flags.DEFINE_integer("select_validation_percentage", 20,
                             "Select random percentage of data as validation set.")
 tf.app.flags.DEFINE_integer("select_test_percentage", 20,
@@ -48,15 +49,12 @@ def melody_train(graph, loader, config, summary_frequency=2):
             if global_step_ < 3500:
                 # Pre-Training
                 batch_songs = loader.get_batch(config.batch_size, config.song_length)
-                if global_step_ > 100 and global_step_ % 100 == 0:
-                    output_melody_, pre_loss_g_, global_step_, _ = session.run(
-                        [pre_output_melody, pre_loss_g, global_step,
-                         g_pre_train_op], {input_melody: batch_songs})
+                output_melody_, pre_loss_g_, global_step_, _ = session.run(
+                    [pre_output_melody, pre_loss_g, global_step,
+                     g_pre_train_op], {input_melody: batch_songs})
+                if global_step_ % 100 == 0:
                     print('Epoch: %d  pre_loss: %f' % (global_step_, pre_loss_g_))
-                    print(output_melody_[0][0:30])
-                else:
-                    pre_loss_g_, global_step_, _ = session.run([pre_loss_g, global_step, g_pre_train_op],
-                                                               {input_melody: batch_songs})
+
             else:
                 # Training
                 d_iters = 4
@@ -68,9 +66,14 @@ def melody_train(graph, loader, config, summary_frequency=2):
                 g_op, global_step_, g_loss, d_loss, output_melody_ = session.run(
                     [train_g_op, global_step, loss_g, loss_d, output_melody], {input_melody: batch_songs})
 
-                if global_step_ % 50 == 0 and global_step_ > 0:
+                if global_step_ % 50 == 0:
                     print('Global_step: %d    loss_d: %f    loss_g: %f' % (global_step_, d_loss, g_loss))
-                    print(output_melody_[0][0][0: 30])
+
+            if global_step_ > 2000 and global_step_ % 200 == 0:
+                filename = os.path.join(FLAGS.generated_data_dir, 'global_step-{}-{}.midi'
+                                        .format(global_step_, datetime.datetime.today().strftime('%Y-%m-%d-%H-%M-%S')))
+                print('save file: %s' % filename)
+                loader.data_to_song(filename, output_melody_[0])
 
 
 
@@ -89,16 +92,24 @@ def main(_):
             os.makedirs(FLAGS.traindir)
         except:
             raise IOError
+
+    FLAGS.generated_data_dir = os.path.join(FLAGS.traindir, 'generated_data')
+    if not os.path.exists(FLAGS.generated_data_dir):
+        try:
+            os.makedirs(FLAGS.generated_data_dir)
+        except:
+            raise IOError
+
     print('Train dir: %s' % FLAGS.traindir)
 
     melody_param = MelodyParam()
     config = rnn_gan_graph.RnnGanConfig(melody_param=melody_param)
+
     print('Begin Create Graph....')
     graph = rnn_gan_graph.build_graph(config)
     print('Begin Load Data....')
     loader = melody_utils.MusicDataLoader(FLAGS.datadir, FLAGS.select_validation_percentage,
                                           FLAGS.select_test_percentage, config)
-
     melody_train(graph, loader, config)
 
 
@@ -113,6 +124,7 @@ class MelodyParam:
         self.pitch_min = pitch_min
         self.velocity_max = velocity_max
         self.velocity_min = velocity_min
+        self.bpm = 45
 
         self.nor_ticks = (ticks_max - ticks_min) / 15 + 1
         self.nor_length = (length_max - length_min) / 15 + 1
