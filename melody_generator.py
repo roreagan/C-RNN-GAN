@@ -33,7 +33,7 @@ def melody_train(graph, loader, config, summary_frequency=2):
     clip_d_op = graph.get_collection('clip_d_op')[0]
     train_g_op = graph.get_collection('train_g_op')[0]
     pre_output_melody = graph.get_collection('pre_output_melody')[0]
-    output_melody = graph.get_collection('output_melody')
+    output_melody = graph.get_collection('output_melody')[0]
     g_pre_train_op = graph.get_collection('g_pre_train_op')[0]
     pre_loss_g = graph.get_collection('pre_loss_g')[0]
 

@@ -150,7 +150,7 @@ def build_graph(config):
                 generated_note = g_output_note
                 output_melody.append(g_output_note)
 
-            output_melody_tf = tf.transpose(pre_output_melody, perm=[1, 0, 2])
+            output_melody_tf = tf.transpose(output_melody, perm=[1, 0, 2])
             tf.add_to_collection('output_melody', output_melody_tf)
 
 
@@ -202,10 +202,10 @@ class RnnGanConfig:
         self.batch_size = 10
         self.song_length = 100
         self.num_song_features = 4
-        self.g_rnn_layers = [300, 300, 300]
+        self.g_rnn_layers = [300, 300]
         self.d_rnn_layers = [300, 300]
         self.clip_norm = 5
-        self.initial_g_learning_rate = 0.01
+        self.initial_g_learning_rate = 0.005
         self.initial_learning_rate = 0.0001
         self.decay_steps = 1000
         self.decay_rate = 0.95
