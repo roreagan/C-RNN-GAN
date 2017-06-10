@@ -19,6 +19,8 @@ BEGIN_TICK = 0
 NUM_FEATURES_PER_TONE = 3
 
 debug = ''
+
+
 # debug = 'overfit'
 
 
@@ -37,7 +39,6 @@ class MusicDataLoader(object):
         if not not_read:
             self.download_midi_data()
             self.read_data(select_validation_percentage, select_test_percentage, works_per_composer)
-
 
     def download_midi_data(self):
         """
@@ -307,125 +308,48 @@ class MusicDataLoader(object):
         ticks_per_quarter_note = midi_pattern.resolution
         if ticks_per_quarter_note % self.output_ticks_per_quarter_note != 0:
             return None
-        # print('Resoluton: {}'.format(ticks_per_quarter_note))
         input_ticks_per_output_tick = ticks_per_quarter_note / self.output_ticks_per_quarter_note
-        # if debug == 'overfit': input_ticks_per_output_tick = 1.0
 
         # Multiply with output_ticks_pr_input_tick for output ticks.
         for track in midi_pattern:
             last_event_input_tick = 0
-            not_closed_notes = []
+            not_closed_note = None
             for event in track:
+                if len(song_data) >= 3000:
+                    return song_data
                 if type(event) == midi.events.SetTempoEvent:
                     pass  # These are currently ignored
                 elif (type(event) == midi.events.NoteOffEvent) or \
                         (type(event) == midi.events.NoteOnEvent and \
                                      event.velocity == 0):
-                    retained_not_closed_notes = []
-                    for e in not_closed_notes:
-                        if event.data[0] == e[FREQ]:
+                    if not_closed_note:
+                        if event.data[0] == not_closed_note[0]:
                             event_abs_tick = (event.tick + last_event_input_tick) / input_ticks_per_output_tick
-                            # current_note['length'] = float(ticks*microseconds_per_tick)
-                            e[LENGTH] = event_abs_tick - e[BEGIN_TICK]
-                            song_data.append(e)
-                        else:
-                            retained_not_closed_notes.append(e)
-                    # if len(not_closed_notes) == len(retained_not_closed_notes):
-                    #  print('Warning. NoteOffEvent, but len(not_closed_notes)({}) == len(retained_not_closed_notes)({})'.format(len(not_closed_notes), len(retained_not_closed_notes)))
-                    #  print('NoteOff: {}'.format(tone_to_freq(event.data[0])))
-                    #  print('not closed: {}'.format(not_closed_notes))
-                    not_closed_notes = retained_not_closed_notes
+                            pitch = not_closed_note[0]
+                            if pitch > self.config.melody_params.pitch_max:
+                                pitch = pitch - ((pitch - self.config.melody_params.pitch_max) / 12 + 1) * 12
+                            elif pitch < self.config.melody_params.pitch_min:
+                                pitch = pitch + ((self.config.melody_params.pitch_min - pitch) / 12 + 1) * 12
+                            song_data.append(pitch - self.config.melody_params.pitch_min + 2)
+                            for i in range((not_closed_note[1] - event_abs_tick) / 15 - 1):
+                                song_data.append(1)
+                            song_data.append(0)
+                            not_closed_note = None
                 elif type(event) == midi.events.NoteOnEvent:
                     begin_tick = (event.tick + last_event_input_tick) / input_ticks_per_output_tick
-                    note = [0] * (NUM_FEATURES_PER_TONE + 1)
-                    note[FREQ] = event.data[0]
-                    note[VELOCITY] = event.data[1]
-                    note[BEGIN_TICK] = begin_tick
-                    not_closed_notes.append(note)
-                    # not_closed_notes.append([0.0, tone_to_freq(event.data[0]), velocity, begin_tick, event.channel])
+                    note = event.data[0]
+                    if not not_closed_note:
+                        not_closed_note = [note, begin_tick]
                 last_event_input_tick += event.tick
-            # for e in not_closed_notes:
-            #     # print('Warning: found no NoteOffEvent for this note. Will close it. {}'.format(e))
-            #     e[LENGTH] = float(ticks_per_quarter_note) / input_ticks_per_output_tick
-            #     song_data.append(e)
-        song_data.sort(key=lambda e: e[BEGIN_TICK])
         return song_data
 
     def rewind(self, part='train'):
         self.pointer[part] = 0
 
-    def get_batch(self, batchsize, songlength, part='train'):
-        """
-          get_batch() returns a batch from self.songs, as a
-          pair of tensors song_data with shape [batchsize, songlength, num_song_features].
-
-          Since self.songs was shuffled in read_data(), the batch is
-          a random selection without repetition.
-
-          A tone  has a feature telling us the pause before it.
-
-        """
-        if self.pointer[part] > len(self.songs[part]) - batchsize:
-            # return False, [None, None]
-            self.pointer[part] = self.pointer[part] % (len(self.songs[part]) - batchsize)
-        if self.songs[part]:
-            batch = self.songs[part][self.pointer[part]:self.pointer[part] + batchsize]
-            self.pointer[part] += batchsize
-            batch_songs = np.ndarray(shape=[batchsize, songlength, self.config.num_song_features])
-
-            for s in range(len(batch)):
-                songmatrix = np.ndarray(shape=[songlength, self.config.num_song_features])
-
-                begin = 1
-                if len(batch[s][SONG_DATA]) > songlength:
-                    begin = random.randint(1, len(batch[s][SONG_DATA]) - songlength)
-                matrixrow = 0
-                n = begin
-                while matrixrow < songlength:
-                    event = np.zeros(shape=[NUM_FEATURES_PER_TONE + 1])
-                    length = batch[s][SONG_DATA][n][LENGTH]
-                    if length > self.config.melody_params.length_max:
-                        length = self.config.melody_params.length_max
-                    elif length < self.config.melody_params.length_min:
-                        length = self.config.melody_params.length_min
-                    event[LENGTH] = (length - self.config.melody_params.length_min) / 15 + \
-                                    int(abs(np.random.normal(0, 1, 1)))
-
-                    pitch = batch[s][SONG_DATA][n][FREQ]
-                    if pitch > self.config.melody_params.pitch_max:
-                        pitch = pitch - ((pitch - self.config.melody_params.pitch_max) / 12 + 1) * 12
-                    elif pitch < self.config.melody_params.pitch_min:
-                        pitch = pitch + ((self.config.melody_params.pitch_min - pitch) / 12 + 1) * 12
-                    event[FREQ] = pitch - self.config.melody_params.pitch_min
-
-                    velocity = batch[s][SONG_DATA][n][VELOCITY]
-                    if velocity > self.config.melody_params.velocity_max:
-                        velocity = self.config.melody_params.velocity_max
-                    elif velocity < self.config.melody_params.velocity_min:
-                        velocity = self.config.melody_params.velocity_min
-                    event[VELOCITY] = velocity - self.config.melody_params.velocity_min
-
-                    ticks = batch[s][SONG_DATA][n][TICKS_FROM_PREV_START] - batch[s][SONG_DATA][n-1][TICKS_FROM_PREV_START]
-                    if ticks > self.config.melody_params.ticks_max:
-                        ticks = self.config.melody_params.ticks_max
-                    elif ticks < self.config.melody_params.ticks_min:
-                        ticks = self.config.melody_params.ticks_min
-                    event[TICKS_FROM_PREV_START] = (ticks - self.config.melody_params.ticks_min) / 15 + \
-                                                   int(abs(np.random.normal(0, 1, 1)))
-
-                    songmatrix[matrixrow, :] = event
-                    matrixrow += 1
-                    n += 1
-                batch_songs[s, :, :] = songmatrix
-
-            return batch_songs
-        else:
-            raise 'get_batch() called but self.songs is not initialized.'
-
     def get_batch_rnn(self, batchsize, songlength, part='train'):
         """
           get_batch() returns a batch from self.songs, as a
-          pair of tensors song_data with shape [batchsize, songlength, num_song_features].
+          pair of tensors song_data with shape [batchsize, songlength].
 
           Since self.songs was shuffled in read_data(), the batch is
           a random selection without repetition.
@@ -443,58 +367,21 @@ class MusicDataLoader(object):
             batch_songs = np.ndarray(shape=[batchsize, songlength])
 
             for s in range(len(batch)):
-                songmatrix = np.ndarray(shape=[songlength])
+                if len(batch[s][SONG_DATA]) < songlength:
+                    raise 'the length of song is too short'
+                begin = random.randint(0, len(batch[s][SONG_DATA]) - songlength)
+                songmatrix = batch[s][SONG_DATA][begin: begin + songlength]
+                batch_songs[s, :] = songmatrix
 
-                begin = 1
-                if len(batch[s][SONG_DATA]) > songlength:
-                    begin = random.randint(1, len(batch[s][SONG_DATA]) - songlength)
-                matrixrow = 0
-                n = begin
-
-                begin_time = 0
-                length = 0
-                while matrixrow < songlength:
-                    event = np.zeros(shape=[NUM_FEATURES_PER_TONE + 1])
-                    length = batch[s][SONG_DATA][n][LENGTH]
-                    if length > self.config.melody_params.length_max:
-                        length = self.config.melody_params.length_max
-                    elif length < self.config.melody_params.length_min:
-                        length = self.config.melody_params.length_min
-                    event[LENGTH] = (length - self.config.melody_params.length_min) / 15 + \
-                                    int(abs(np.random.normal(0, 1, 1)))
-
-                    pitch = batch[s][SONG_DATA][n][FREQ]
-                    if pitch > self.config.melody_params.pitch_max:
-                        pitch = pitch - ((pitch - self.config.melody_params.pitch_max) / 12 + 1) * 12
-                    elif pitch < self.config.melody_params.pitch_min:
-                        pitch = pitch + ((self.config.melody_params.pitch_min - pitch) / 12 + 1) * 12
-                    event[FREQ] = pitch - self.config.melody_params.pitch_min + 2
-
-
-                    ticks = batch[s][SONG_DATA][n][TICKS_FROM_PREV_START] - batch[s][SONG_DATA][n-1][TICKS_FROM_PREV_START]
-                    if ticks > self.config.melody_params.ticks_max:
-                        ticks = self.config.melody_params.ticks_max
-                    elif ticks < self.config.melody_params.ticks_min:
-                        ticks = self.config.melody_params.ticks_min
-                    event[TICKS_FROM_PREV_START] = (ticks - self.config.melody_params.ticks_min) / 15 + \
-                                                   int(abs(np.random.normal(0, 1, 1)))
-
-                    songmatrix[matrixrow, :] = event
-                    matrixrow += 1
-                    n += 1
-                batch_songs[s, :, :] = songmatrix
-
-            return batch_songs[:, 0: songlength-1, :], batch_songs[:, 1: songlength, :]
+            return batch_songs[:, 0: songlength - 1], batch_songs[:, 1: songlength]
         else:
             raise 'get_batch() called but self.songs is not initialized.'
-
 
     def data_to_song(self, song_name, song_data):
         """
         data_to_song takes a song in internal representation in the shape of
-        [song_length, num_song_features] to a midi pattern
-        all the features are retrieved to the settings in config 
-        
+        [song_length] to a midi pattern
+
         :param song_data: 
         :return: a midi pattern of song_data
         """
@@ -503,41 +390,28 @@ class MusicDataLoader(object):
         cur_track = midi.Track([])
         cur_track.append(midi.events.SetTempoEvent(tick=0, bpm=self.config.melody_params.bpm))
 
-        song_events_absolute_ticks = []
-        abs_tick_note_beginning = 0
-        for frame in song_data:
-            ticks = int(round(frame[TICKS_FROM_PREV_START])) * 15 + self.config.melody_params.ticks_min
-            if ticks > self.config.melody_params.ticks_max:
-                ticks = self.config.melody_params.ticks_max
-            abs_tick_note_beginning += ticks
-            tick_len = int(round(frame[LENGTH])) * 15 + self.config.melody_params.length_min
-            if tick_len > self.config.melody_params.length_max:
-                tick_len = self.config.melody_params.length_max
-            pitch = int(round(frame[FREQ])) + self.config.melody_params.pitch_min
-            if pitch > self.config.melody_params.pitch_max:
-                pitch = self.config.melody_params.pitch_max
-            velocity = int(round(frame[VELOCITY])) + self.config.melody_params.velocity_min
-            if velocity > self.config.melody_params.velocity_max:
-                velocity = self.config.melody_params.velocity_max
+        note_not_close = None
+        last_note_tick = 0
+        for i in range(len(song_data)):
+            note = song_data[i]
+            if not note_not_close:
+                if note > 1:
+                    note_not_close = [note, i]
+                    event = midi.events.NoteOnEvent(tick=(i - last_note_tick) * 15, velocity=100,
+                                                    pitch=note + self.config.melody_params.pitch_min)
+                    cur_track.append(event)
+            else:
+                if note == 0:
+                    event = midi.events.NoteOffEvent(tick=(i - note_not_close[1]) * 15, velocity=0,
+                                                     pitch=note_not_close[0] + self.config.melody_params.pitch_min)
+                    cur_track.append(event)
+                    last_note_tick = i
+                    note_not_close = None
 
-            song_events_absolute_ticks.append((abs_tick_note_beginning,
-                                               midi.events.NoteOnEvent(
-                                                   tick=0,
-                                                   velocity=velocity,
-                                                   pitch=pitch)))
-            song_events_absolute_ticks.append((abs_tick_note_beginning + tick_len,
-                                               midi.events.NoteOffEvent(
-                                                   tick=0,
-                                                   velocity=0,
-                                                   pitch=pitch)))
-
-        song_events_absolute_ticks.sort(key=lambda e: e[0])
-        abs_tick_note_beginning = 0
-        for abs_tick, event in song_events_absolute_ticks:
-            rel_tick = abs_tick - abs_tick_note_beginning
-            event.tick = rel_tick
+        if note_not_close:
+            event = midi.events.NoteOffEvent(tick=(len(song_data) - note_not_close[1]) * 15, velocity=0,
+                                             pitch=note_not_close[0] + self.config.melody_params.pitch_min)
             cur_track.append(event)
-            abs_tick_note_beginning = abs_tick
 
         cur_track.append(midi.EndOfTrackEvent(tick=int(self.output_ticks_per_quarter_note)))
         midi_pattern.append(cur_track)

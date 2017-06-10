@@ -2,13 +2,18 @@
 RNN-GAN networks to generate a piece of melody
 
 to run:
-python melody_generator.py --datadir data/examples/ --traindir data/traindir2/ --select_validation_percentage 20 --select_test_percentage 20
+python melody_generator.py --network gan --datadir data/examples/ --traindir data/traindir2/ --select_validation_percentage 20 --select_test_percentage 20
 """
 import os, datetime
 
 import tensorflow as tf
+import numpy as np
+
 import rnn_gan_graph
+import rnn_graph
+import properties
 import melody_utils
+import rnn_melody_utils
 
 FLAGS = tf.app.flags.FLAGS
 tf.app.flags.DEFINE_string("datadir", None,
@@ -21,11 +26,15 @@ tf.app.flags.DEFINE_integer("select_validation_percentage", 20,
                             "Select random percentage of data as validation set.")
 tf.app.flags.DEFINE_integer("select_test_percentage", 20,
                             "Select random percentage of data as test set.")
-tf.app.flags.DEFINE_integer("num_max_epochs", 5000,
-                            "Select random percentage of data as test set.")
+tf.app.flags.DEFINE_string("network", 'gan',
+                            "Select network to use.")
+tf.app.flags.DEFINE_integer("num_max_epochs_1", 6000,
+                            "Select max epoch of rnn gan.")
+tf.app.flags.DEFINE_integer("num_max_epochs_2", 1000,
+                            "Select max epoch of rnn.")
 
 
-def melody_train(graph, loader, config, summary_frequency=2):
+def rnn_gan_train(graph, loader, config):
     global_step = graph.get_collection('global_step')[0]
     input_melody = graph.get_collection('input_melody')[0]
     loss_d = graph.get_collection('loss_d')[0]
@@ -37,13 +46,13 @@ def melody_train(graph, loader, config, summary_frequency=2):
     g_pre_train_op = graph.get_collection('g_pre_train_op')[0]
     pre_loss_g = graph.get_collection('pre_loss_g')[0]
 
-    sv = tf.train.Supervisor(graph=graph, logdir=FLAGS.traindir, save_model_secs=1200, global_step=global_step)
+    sv = tf.train.Supervisor(graph=graph, logdir=FLAGS.traindir, save_model_secs=12000, global_step=global_step)
 
     with sv.managed_session() as session:
         global_step_ = session.run(global_step)
         tf.logging.info('Starting training loop...')
         print('Begin Run Net. Print Every 100 epochs ')
-        while global_step_ < FLAGS.num_max_epochs:
+        while global_step_ < FLAGS.num_max_epochs_1:
             if sv.should_stop():
                 break
             if global_step_ < 3500:
@@ -69,14 +78,93 @@ def melody_train(graph, loader, config, summary_frequency=2):
                 if global_step_ % 50 == 0:
                     print('Global_step: %d    loss_d: %f    loss_g: %f' % (global_step_, d_loss, g_loss))
 
-            if global_step_ > 2000 and global_step_ % 200 == 0:
+            if (3000 > global_step_ > 2000 or global_step_ > 5000) and global_step_ % 200 == 0:
                 filename = os.path.join(FLAGS.generated_data_dir, 'global_step-{}-{}.midi'
                                         .format(global_step_, datetime.datetime.today().strftime('%Y-%m-%d-%H-%M-%S')))
                 print('save file: %s' % filename)
                 loader.data_to_song(filename, output_melody_[0])
+                print(output_melody_[0][0:30])
+
+
+def rnn_gan(melody_param):
+    config = rnn_gan_graph.RnnGanConfig(melody_param=melody_param)
+    print('Begin Create Graph....')
+    graph = rnn_gan_graph.build_graph(config)
+    print('Begin Load Data....')
+    loader = melody_utils.MusicDataLoader(FLAGS.datadir, FLAGS.select_validation_percentage,
+                                          FLAGS.select_test_percentage, config)
+    rnn_gan_train(graph, loader, config)
 
 
 
+def rnn_train(graph, loader, config):
+    global_step = graph.get_collection('global_step')[0]
+    temperature = graph.get_collection('temperature')[0]
+    input_melody = graph.get_collection('input_melody')[0]
+    input_labels = graph.get_collection('input_labels')[0]
+    loss = graph.get_collection('loss')[0]
+    train_op = graph.get_collection('train_op')[0]
+
+    pitch_logits_flat = graph.get_collection('pitch_logits_flat')[0]
+    pitch_softmax_cross_entropy = graph.get_collection('pitch_softmax_cross_entropy')[0]
+    pitch_softmax = graph.get_collection('pitch_softmax')[0]
+
+    inputs_f = graph.get_collection('inputs_f')[0]
+    outputs_f = graph.get_collection('outputs_f')[0]
+
+    temperature_ = 1
+
+    sv = tf.train.Supervisor(graph=graph, logdir=FLAGS.traindir, save_model_secs=12000, global_step=global_step)
+
+    with sv.managed_session() as session:
+        global_step_ = session.run(global_step)
+        tf.logging.info('Starting training loop...')
+        print('Begin Run Net. Print Every 100 epochs ')
+        while global_step_ < FLAGS.num_max_epochs_2:
+            if sv.should_stop():
+                break
+            inputs, outputs = loader.get_batch_rnn(config.batch_size, config.song_length)
+            loss_, global_step_, _, pitch_logits_flat_, pitch_softmax_cross_entropy_, inputs_f_, outputs_f_= \
+                session.run([loss, global_step, train_op, pitch_logits_flat, pitch_softmax_cross_entropy,
+                             inputs_f, outputs_f], {input_melody: inputs, input_labels: outputs})
+
+            if global_step_ % 10 == 0:
+                print('Global_step: %d    loss: %f' % (global_step_, loss_))
+            if global_step_ > 300 and global_step_ % 50 == 0:
+                generated_melody = []
+                inputs, outputs = loader.get_batch_rnn(config.batch_size, config.song_length + 1)
+                notes = [[i] for i in inputs[:, -1]]
+                for i in range(config.generated_song_length + 1):
+                    if i == 0:
+                        outputs_f_ = session.run([outputs_f], {input_melody: inputs,
+                                                          temperature: temperature_})
+                    else:
+                        pitch_softmax_ = session.run([pitch_softmax], {input_melody: notes, temperature: temperature_})
+                        notes = retrieve_note(pitch_softmax_, config.batch_size, config.melody_params)
+                        generated_melody.append(notes[0][0])
+                filename = os.path.join(FLAGS.generated_data_dir, 'global_step-{}-{}.midi'
+                                        .format(global_step_, datetime.datetime.today().strftime('%Y-%m-%d-%H-%M-%S')))
+                print('save file: %s' % filename)
+                print(generated_melody)
+                loader.data_to_song(filename, generated_melody)
+
+
+def retrieve_note(pitch_softmax, batch_size, melody_param):
+    pitchs = []
+    for i in range(batch_size):
+        pitchs.append([np.random.choice(melody_param.nor_pitch + 2, p=pitch_softmax[0][i][0])])
+    return pitchs
+
+
+
+def gan(melody_param):
+    config = rnn_graph.RnnConfig(melody_param)
+    print('Begin Create Graph....')
+    graph = rnn_graph.build_graph(config)
+    print('Begin Load Data....')
+    loader = rnn_melody_utils.MusicDataLoader(FLAGS.datadir, FLAGS.select_validation_percentage,
+                                              FLAGS.select_test_percentage, config)
+    rnn_train(graph, loader, config)
 
 
 def main(_):
@@ -102,49 +190,12 @@ def main(_):
 
     print('Train dir: %s' % FLAGS.traindir)
 
-    melody_param = MelodyParam()
-    config = rnn_gan_graph.RnnGanConfig(melody_param=melody_param)
+    melody_param = properties.MelodyParam()
 
-    print('Begin Create Graph....')
-    graph = rnn_gan_graph.build_graph(config)
-    print('Begin Load Data....')
-    loader = melody_utils.MusicDataLoader(FLAGS.datadir, FLAGS.select_validation_percentage,
-                                          FLAGS.select_test_percentage, config)
-    melody_train(graph, loader, config)
-
-
-class MelodyParam:
-    def __init__(self, ticks_max=240, ticks_min=0, length_max=240, length_min=15, pitch_max=84, pitch_min=40,
-                 velocity_max=127, velocity_min=100):
-        self.ticks_max = ticks_max
-        self.ticks_min = ticks_min
-        self.length_max = length_max
-        self.length_min = length_min
-        self.pitch_max = pitch_max
-        self.pitch_min = pitch_min
-        self.velocity_max = velocity_max
-        self.velocity_min = velocity_min
-        self.bpm = 45
-
-        self.nor_ticks = (ticks_max - ticks_min) / 15 + 1
-        self.nor_length = (length_max - length_min) / 15 + 1
-        self.nor_pitch = pitch_max - pitch_min
-        self.nor_velocity = velocity_max - velocity_min
-
-        self.total_length = self.nor_ticks + self.nor_length + self.nor_pitch + self.nor_velocity
-
-        pitch_rate = 1
-        velocity_rate = 0.25
-
-        # self.ticks_weight = self.nor_ticks / float(self.total_length)
-        # self.length_weight = self.nor_length / float(self.total_length)
-        # self.pitch_weight = self.nor_pitch / float(self.total_length) * pitch_rate
-        # self.velocity_weight = self.nor_velocity / float(self.total_length) * velocity_rate
-
-        self.ticks_weight = 1
-        self.length_weight = 1
-        self.pitch_weight = 1
-        self.velocity_weight = 0.2
+    if FLAGS.network == 'rnn_gan':
+        rnn_gan(melody_param)
+    elif FLAGS.network == 'gan':
+        gan(melody_param)
 
 
 if __name__ == '__main__':

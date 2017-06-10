@@ -2,6 +2,9 @@
 
 import tensorflow as tf
 
+import rnn_gan_graph
+import properties
+
 def make_rnn_cell(rnn_layer_sizes,
                   dropout_keep_prob=1.0,
                   attn_length=0,
@@ -34,61 +37,60 @@ def make_rnn_cell(rnn_layer_sizes,
 
   return cell
 
+
 def data_type():
-    return tf.float16  # this can be replaced with tf.float32
+    return tf.float32
+
 
 def build_graph(config):
     batch_size = config.batch_size
     # song_length = config.song_length
     num_song_features = config.num_song_features
     with tf.Graph().as_default() as graph:
-        # input_melody is a seed with the shape of [batch_size, note_length, num_song_features] to generate a step.
-        # In train process, input_melody and the relative primer_melody are given.
-        # In generate process, input_melody is randomly generated as the input of generator.
-        input_melody, primer_melody = None, None
-        primer_melody = tf.placeholder(dtype=tf.float32, shape=[batch_size, None, num_song_features])
-        input_melody = tf.placeholder(dtype=tf.float32, shape=[batch_size, None, num_song_features])
+        # this graph use input_melody to generate a note following input_melody. the generated noted is
+        # in a form of probabilities of every song feature.
+        # In training, labels shows the correct label following input_melody
+        # batch_size means training some
+        input_labels = tf.placeholder(dtype=tf.int32, shape=[batch_size, None])
+        input_melody = tf.placeholder(dtype=tf.int32, shape=[batch_size, None])
 
         global_step = tf.Variable(0, trainable=False, name='global_step')
 
         tf.add_to_collection('input_melody', input_melody)
-        tf.add_to_collection('primer_melody', primer_melody)
+        tf.add_to_collection('input_labels', input_labels)
         tf.add_to_collection('global_step', global_step)
 
         with tf.variable_scope('G') as scopeG:
-            cell_g = make_rnn_cell(config.g_rnn_layers)  # set to [300, 300]
+            embedding = tf.get_variable("embedding", [config.melody_params.nor_pitch + 2, config.g_rnn_layers[0]])
+            inputs = tf.nn.embedding_lookup(embedding, input_melody)
+
+            cell_g = make_rnn_cell(config.g_rnn_layers)
             init_state_g = cell_g.zero_state(batch_size, data_type())
-            inputs = tf.contrib.layers.linear(input_melody, config.g_rnn_layers[0])
-            outputs, final_state_g = tf.nn.dynamic_rnn(
+
+            norm = tf.random_normal_initializer(stddev=1.0, dtype=data_type())
+            outputs, init_state_g = tf.nn.dynamic_rnn(
                 cell_g, inputs, initial_state=init_state_g, parallel_iterations=1,
                 swap_memory=True)
             outputs_flat = tf.reshape(outputs, [-1, cell_g.output_size])
-            pitch_logits_flat = tf.contrib.layers.linear(outputs_flat, config.pitch_length)
-            ticks_logits_flat = tf.contrib.layers.linear(outputs_flat, config.ticks_length)
-            velocity_logits_flat = tf.contrib.layers.linear(outputs_flat, config.velocity_length)
-            length_logits_flat = tf.contrib.layers.linear(outputs_flat, config.length_length)
 
-            # PreTraining
+            pitch_logits_flat = tf.contrib.layers.fully_connected(
+                outputs_flat, config.melody_params.nor_pitch + 2, scope='output_to_pitch', weights_initializer=norm)
+
+            tf.add_to_collection('inputs_f', inputs)
+            tf.add_to_collection('outputs_f', outputs)
+
+            tf.add_to_collection('pitch_logits_flat', pitch_logits_flat)
+
+            # Training
             # get softmax cross entropy of every song features
             # softmax for every features shows the probable value of one step
-            labels_flat = tf.reshape(primer_melody, shape=[-1, num_song_features])
+            labels = tf.reshape(input_labels, [-1])
 
-            ticks_labels_flat = tf.reshape(tf.slice(labels_flat, [-1, 0], [-1, 1]), [-1])
-            length_labels_flat = tf.reshape(tf.slice(labels_flat, [-1, 0], [-1, 1]), [-1])
-            pitch_labels_flat = tf.reshape(tf.slice(labels_flat, [-1, 0], [-1, 1]), [-1])
-            velocity_labels_flat = tf.reshape(tf.slice(labels_flat, [-1, 0], [-1, 1]), [-1])
-
-            ticks_softmax_cross_entropy = tf.nn.sparse_softmax_cross_entropy_with_logits(
-                labels=ticks_labels_flat, logits=ticks_logits_flat)
-            length_softmax_cross_entropy = tf.nn.sparse_softmax_cross_entropy_with_logits(
-                labels=length_labels_flat, logits=length_logits_flat)
             pitch_softmax_cross_entropy = tf.nn.sparse_softmax_cross_entropy_with_logits(
-                labels=pitch_labels_flat, logits=pitch_logits_flat)
-            velocity_softmax_cross_entropy = tf.nn.sparse_softmax_cross_entropy_with_logits(
-                labels=velocity_labels_flat, logits=velocity_logits_flat)
-            loss = tf.reduce_sum(tf.add(tf.add(tf.add(ticks_softmax_cross_entropy, length_softmax_cross_entropy),
-                                               pitch_softmax_cross_entropy), velocity_softmax_cross_entropy))
+                labels=labels, logits=pitch_logits_flat)
+            loss = tf.reduce_mean(pitch_softmax_cross_entropy)
 
+            tf.add_to_collection('pitch_softmax_cross_entropy', pitch_softmax_cross_entropy)
             tf.add_to_collection('loss', loss)
             learning_rate = tf.train.exponential_decay(
                 config.initial_learning_rate, global_step, config.decay_steps,
@@ -105,35 +107,41 @@ def build_graph(config):
             # Generate a step for generating. Returned softmaxs contain probabilities of every one-hot features
 
             temperature = tf.placeholder(data_type(), [])
-
-            ticks_softmax_flat = tf.nn.softmax(
-                tf.div(ticks_logits_flat, tf.fill([config.ticks_length], temperature)))
-            ticks_softmax = tf.reshape(ticks_softmax_flat, [batch_size, -1, config.ticks_length])
-
-            length_softmax_flat = tf.nn.softmax(
-                tf.div(length_logits_flat, tf.fill([config.length_length], temperature)))
-            length_softmax = tf.reshape(length_softmax_flat, [batch_size, -1, config.length_length])
-
             pitch_softmax_flat = tf.nn.softmax(
-                tf.div(pitch_logits_flat, tf.fill([config.pitch_length], temperature)))
-            pitch_softmax = tf.reshape(pitch_softmax_flat, [batch_size, -1, config.pitch_length])
-
-            velocity_softmax_flat = tf.nn.softmax(
-                tf.div(velocity_logits_flat, tf.fill([config.velocity_length], temperature)))
-            velocity_softmax = tf.reshape(velocity_softmax_flat, [batch_size, -1, config.velocity_length])
+                tf.div(pitch_logits_flat, tf.fill([config.melody_params.nor_pitch + 2], temperature)))
+            pitch_softmax = tf.reshape(pitch_softmax_flat, [batch_size, -1, config.melody_params.nor_pitch + 2])
 
             tf.add_to_collection('temperature', temperature)
-            tf.add_to_collection('ticks_softmax', ticks_softmax)
-            tf.add_to_collection('length_softmax', length_softmax)
             tf.add_to_collection('pitch_softmax', pitch_softmax)
-            tf.add_to_collection('velocity_softmax', velocity_softmax)
             tf.add_to_collection('initial_state', init_state_g)
-            tf.add_to_collection('final_state', final_state_g)
+    return graph
 
 
 
+def main(_):
+    melody_param = properties.MelodyParam()
+    config = RnnConfig(melody_param=melody_param)
+    build_graph(config)
 
 
+class RnnConfig:
+    def __init__(self, melody_param=None):
+        self.batch_size = 2
+        self.song_length = 30
+        self.generated_song_length = 128
+        self.num_song_features = 4
+        self.g_rnn_layers = [50, 50]
+        self.clip_norm = 5
+        self.initial_learning_rate = 0.005
+        self.decay_steps = 1000
+        self.decay_rate = 0.95
+        self.reg_constant = 0.01  # for regularization, choose a appropriate one
+
+        self.melody_params = melody_param
+
+
+if __name__ == '__main__':
+    tf.app.run()
 
 
 

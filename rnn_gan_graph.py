@@ -103,7 +103,7 @@ def build_graph(config):
                                         config.melody_params.pitch_weight, config.melody_params.velocity_weight],
                                        dtype=data_type())
 
-            pre_loss_g = tf.reduce_sum(tf.squared_difference(tf.multiply(pre_output_melody_tf, weight_ticks),
+            pre_loss_g = tf.reduce_mean(tf.squared_difference(tf.multiply(pre_output_melody_tf, weight_ticks),
                                                              tf.multiply(tf.to_float(input_melody), weight_ticks)))
 
             reg_losses = tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES)
@@ -147,12 +147,12 @@ def build_graph(config):
 
                 g_output_note = tf.contrib.layers.fully_connected(outputs, config.num_song_features,
                                                                   scope='output_to_note')
-                generated_note = g_output_note
+                random_offset = tf.truncated_normal(shape=[batch_size, 4], mean=0.0, stddev=7.0)
+                generated_note = tf.add(g_output_note, random_offset)
                 output_melody.append(g_output_note)
 
             output_melody_tf = tf.transpose(output_melody, perm=[1, 0, 2])
             tf.add_to_collection('output_melody', output_melody_tf)
-
 
         with tf.variable_scope('D') as scopeD:
             inputs_d = [tf.to_float(tf.squeeze(input_d)) for input_d in tf.split(input_melody, song_length, 1)]
@@ -180,6 +180,7 @@ def build_graph(config):
                                                 tf.AggregationMethod.EXPERIMENTAL_ACCUMULATE_N), config.max_grad_norm)
         train_d_op = optimizer_d.apply_gradients(zip(d_grads, d_params))
         clip_d_op = [w.assign(tf.clip_by_value(w, -config.clip_w_norm, config.clip_w_norm)) for w in d_params]
+
         train_g_op = optimizer_g.apply_gradients(zip(g_grads, g_params), global_step)
         tf.add_to_collection('loss_d', loss_d)
         tf.add_to_collection('loss_g', loss_g)
@@ -189,20 +190,12 @@ def build_graph(config):
     return graph
 
 
-
-
-
-
-
-
-
-
 class RnnGanConfig:
     def __init__(self, melody_param=None):
         self.batch_size = 10
         self.song_length = 100
         self.num_song_features = 4
-        self.g_rnn_layers = [300, 300]
+        self.g_rnn_layers = [350, 350]
         self.d_rnn_layers = [300, 300]
         self.clip_norm = 5
         self.initial_g_learning_rate = 0.005
