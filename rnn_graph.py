@@ -2,7 +2,6 @@
 
 import tensorflow as tf
 
-import rnn_gan_graph
 import properties
 
 def make_rnn_cell(rnn_layer_sizes,
@@ -130,7 +129,7 @@ class RnnConfig:
         self.song_length = 30
         self.generated_song_length = 128
         self.num_song_features = 4
-        self.g_rnn_layers = [50, 50]
+        self.g_rnn_layers = [100, 100]
         self.clip_norm = 5
         self.initial_learning_rate = 0.005
         self.decay_steps = 1000

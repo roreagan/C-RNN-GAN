@@ -14,6 +14,7 @@ import rnn_graph
 import properties
 import melody_utils
 import rnn_melody_utils
+import seqGan.seqgan
 
 FLAGS = tf.app.flags.FLAGS
 tf.app.flags.DEFINE_string("datadir", None,
@@ -26,8 +27,8 @@ tf.app.flags.DEFINE_integer("select_validation_percentage", 20,
                             "Select random percentage of data as validation set.")
 tf.app.flags.DEFINE_integer("select_test_percentage", 20,
                             "Select random percentage of data as test set.")
-tf.app.flags.DEFINE_string("network", 'gan',
-                            "Select network to use.")
+tf.app.flags.DEFINE_string("network", 'seq_gan',
+                           "Select a network to use.")
 tf.app.flags.DEFINE_integer("num_max_epochs_1", 6000,
                             "Select max epoch of rnn gan.")
 tf.app.flags.DEFINE_integer("num_max_epochs_2", 1000,
@@ -96,7 +97,6 @@ def rnn_gan(melody_param):
     rnn_gan_train(graph, loader, config)
 
 
-
 def rnn_train(graph, loader, config):
     global_step = graph.get_collection('global_step')[0]
     temperature = graph.get_collection('temperature')[0]
@@ -156,15 +156,20 @@ def retrieve_note(pitch_softmax, batch_size, melody_param):
     return pitchs
 
 
-
 def gan(melody_param):
     config = rnn_graph.RnnConfig(melody_param)
     print('Begin Create Graph....')
     graph = rnn_graph.build_graph(config)
     print('Begin Load Data....')
-    loader = rnn_melody_utils.MusicDataLoader(FLAGS.datadir, FLAGS.select_validation_percentage,
-                                              FLAGS.select_test_percentage, config)
+    loader = rnn_melody_utils.MusicDataLoader(FLAGS.datadir, config)
     rnn_train(graph, loader, config)
+
+
+def seq_gan(melody_param):
+    config = seqGan.seqgan.SeqGanConfig(melody_param)
+    loader = rnn_melody_utils.MusicDataLoader(FLAGS.datadir, config)
+    loader.genedir = FLAGS.generated_data_dir
+    seqGan.seqgan.run_seq_gan(config, loader)
 
 
 def main(_):
@@ -196,6 +201,8 @@ def main(_):
         rnn_gan(melody_param)
     elif FLAGS.network == 'gan':
         gan(melody_param)
+    elif FLAGS.network == 'seq_gan':
+        seq_gan(melody_param)
 
 
 if __name__ == '__main__':
