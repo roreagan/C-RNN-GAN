@@ -1,8 +1,6 @@
 import tensorflow as tf
-import numpy as np
 
-# An alternative to tf.nn.rnn_cell._linear function, which has been removed in Tensorfow 1.0.1
-# The highway layer is borrowed from https://github.com/mkroutikov/tf-lstm-char-cnn
+
 def linear(input_, output_size, scope=None):
     '''
     Linear map: output[k] = sum_i(Matrix[k, i] * input_[i] ) + Bias[k]

@@ -193,9 +193,9 @@ def build_graph(config):
 class RnnGanConfig:
     def __init__(self, melody_param=None):
         self.batch_size = 10
-        self.song_length = 100
+        self.song_length = 50
         self.num_song_features = 4
-        self.g_rnn_layers = [350, 350]
+        self.g_rnn_layers = [300, 300]
         self.d_rnn_layers = [300, 300]
         self.clip_norm = 5
         self.initial_g_learning_rate = 0.005

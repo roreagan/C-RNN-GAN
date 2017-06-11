@@ -63,7 +63,7 @@ def run_seq_gan(config, loader):
     generator = Generator(vocab_size, config.batch_size, config.emb_dim, config.hidden_dim, config.seq_length,
                           config.start_token)
 
-    discriminator = Discriminator(sequence_length=20, num_classes=2, vocab_size=vocab_size,
+    discriminator = Discriminator(sequence_length=config.seq_length, num_classes=2, vocab_size=vocab_size,
                                   embedding_size=config.dis_embedding_dim,
                                   filter_sizes=config.dis_filter_sizes, num_filters=config.dis_num_filters,
                                   l2_reg_lambda=config.dis_l2_reg_lambda)
@@ -102,7 +102,7 @@ def run_seq_gan(config, loader):
         # Train the generator for one step
         for it in range(1):
             samples = generator.generate(sess)
-            rewards = rollout.get_reward(sess, samples, 16, discriminator)
+            rewards = rollout.get_reward(sess, samples, 16, discriminator, config.seq_length)
             feed = {generator.x: samples, generator.rewards: rewards}
             _ = sess.run(generator.g_updates, feed_dict=feed)
 

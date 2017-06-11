@@ -1,8 +1,7 @@
 """" 
-RNN-GAN networks to generate a piece of melody
-
+RNN-GAN 
 to run:
-python melody_generator.py --network gan --datadir data/examples/ --traindir data/traindir2/ --select_validation_percentage 20 --select_test_percentage 20
+python melody_generator.py --network gan --datadir data/examples/ --traindir data/traindir2/
 """
 import os, datetime
 
@@ -23,11 +22,7 @@ tf.app.flags.DEFINE_string("traindir", None,
                            "Directory to save checkpoints.")
 tf.app.flags.DEFINE_string("generated_data_dir", None,
                            "Directory to save midi files.")
-tf.app.flags.DEFINE_integer("select_validation_percentage", 20,
-                            "Select random percentage of data as validation set.")
-tf.app.flags.DEFINE_integer("select_test_percentage", 20,
-                            "Select random percentage of data as test set.")
-tf.app.flags.DEFINE_string("network", 'seq_gan',
+tf.app.flags.DEFINE_string("network", 'rnn',
                            "Select a network to use.")
 tf.app.flags.DEFINE_integer("num_max_epochs_1", 6000,
                             "Select max epoch of rnn gan.")
@@ -79,7 +74,7 @@ def rnn_gan_train(graph, loader, config):
                 if global_step_ % 50 == 0:
                     print('Global_step: %d    loss_d: %f    loss_g: %f' % (global_step_, d_loss, g_loss))
 
-            if (3000 > global_step_ > 2000 or global_step_ > 5000) and global_step_ % 200 == 0:
+            if (3000 > global_step_ > 1000 or global_step_ > 3500) and global_step_ % 200 == 0:
                 filename = os.path.join(FLAGS.generated_data_dir, 'global_step-{}-{}.midi'
                                         .format(global_step_, datetime.datetime.today().strftime('%Y-%m-%d-%H-%M-%S')))
                 print('save file: %s' % filename)
@@ -89,11 +84,12 @@ def rnn_gan_train(graph, loader, config):
 
 def rnn_gan(melody_param):
     config = rnn_gan_graph.RnnGanConfig(melody_param=melody_param)
+    print('Begin Load Data....')
+    loader = melody_utils.MusicDataLoader(FLAGS.datadir, config)
+    loader.get_batch(config.batch_size, config.song_length)
     print('Begin Create Graph....')
     graph = rnn_gan_graph.build_graph(config)
-    print('Begin Load Data....')
-    loader = melody_utils.MusicDataLoader(FLAGS.datadir, FLAGS.select_validation_percentage,
-                                          FLAGS.select_test_percentage, config)
+
     rnn_gan_train(graph, loader, config)
 
 
@@ -156,7 +152,7 @@ def retrieve_note(pitch_softmax, batch_size, melody_param):
     return pitchs
 
 
-def gan(melody_param):
+def rnn(melody_param):
     config = rnn_graph.RnnConfig(melody_param)
     print('Begin Create Graph....')
     graph = rnn_graph.build_graph(config)
@@ -199,8 +195,8 @@ def main(_):
 
     if FLAGS.network == 'rnn_gan':
         rnn_gan(melody_param)
-    elif FLAGS.network == 'gan':
-        gan(melody_param)
+    elif FLAGS.network == 'rnn':
+        rnn(melody_param)
     elif FLAGS.network == 'seq_gan':
         seq_gan(melody_param)
 

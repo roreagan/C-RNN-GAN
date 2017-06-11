@@ -59,56 +59,6 @@ class MusicDataLoader(object):
         except:
             print 'Error reading {}'.format(os.path.join(path, filename))
             return None
-        #
-        # Interpreting the midi pattern.
-        # A pattern has a list of tracks
-        # (midi.Track()).
-        # Each track is a list of events:
-        #   * midi.events.SetTempoEvent: tick, data([int, int, int])
-        #     (The three ints are really three bytes representing one integer.)
-        #   * midi.events.TimeSignatureEvent: tick, data([int, int, int, int])
-        #     (ignored)
-        #   * midi.events.KeySignatureEvent: tick, data([int, int])
-        #     (ignored)
-        #   * midi.events.MarkerEvent: tick, text, data
-        #   * midi.events.PortEvent: tick(int), data
-        #   * midi.events.TrackNameEvent: tick(int), text(string), data([ints])
-        #   * midi.events.ProgramChangeEvent: tick, channel, data
-        #   * midi.events.ControlChangeEvent: tick, channel, data
-        #   * midi.events.PitchWheelEvent: tick, data(two bytes, 14 bits)
-        #
-        #   * midi.events.NoteOnEvent:  tick(int), channel(int), data([int,int]))
-        #     - data[0] is the note (0-127)
-        #     - data[1] is the velocity.
-        #     - if velocity is 0, this is equivalent of a midi.NoteOffEvent
-        #   * midi.events.NoteOffEvent: tick(int), channel(int), data([int,int]))
-        #
-        #   * midi.events.EndOfTrackEvent: tick(int), data()
-        #
-        # Ticks are relative.
-        #
-        # Tempo are in microseconds/quarter note.
-        #
-        # This interpretation was done after reading
-        # http://electronicmusic.wikia.com/wiki/Velocity
-        # http://faydoc.tripod.com/formats/mid.htm
-        # http://www.lastrayofhope.co.uk/2009/12/23/midi-delta-time-ticks-to-seconds/2/
-        # and looking at some files. It will hopefully be enough
-        # for the use in this project.
-        #
-        # We'll save the data intermediately with a dict representing each tone.
-        # The dicts we put into a list. Times are microseconds.
-        # Keys: 'freq', 'velocity', 'begin-tick', 'tick-length'
-        #
-        # 'Output ticks resolution' are fixed at a 32th note,
-        #   - so 8 ticks per quarter note.
-        #
-        # This approach means that we do not currently support
-        #   tempo change events.
-        #
-        # TODO 1: Figure out pitch.
-        # TODO 2: Figure out different channels and instruments.
-        #
 
         song_data = []
 

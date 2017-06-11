@@ -21,11 +21,6 @@ class MelodyParam:
         pitch_rate = 1
         velocity_rate = 0.25
 
-        # self.ticks_weight = self.nor_ticks / float(self.total_length)
-        # self.length_weight = self.nor_length / float(self.total_length)
-        # self.pitch_weight = self.nor_pitch / float(self.total_length) * pitch_rate
-        # self.velocity_weight = self.nor_velocity / float(self.total_length) * velocity_rate
-
         self.ticks_weight = 1
         self.length_weight = 1
         self.pitch_weight = 1
